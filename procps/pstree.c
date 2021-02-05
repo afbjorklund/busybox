@@ -24,12 +24,14 @@
 //usage:#define pstree_full_usage "\n\n"
 //usage:       "Display process tree, optionally start from USER or PID\n"
 //usage:     "\n	-p	Show pids"
+//usage:     "\n	-u	Show users"
 
 #include "libbb.h"
 
 #define PROC_BASE "/proc"
 
 #define OPT_PID  (1 << 0)
+#define OPT_UID  (1 << 1)
 
 struct child;
 
@@ -203,7 +205,7 @@ static int tree_equal(const PROC *a, const PROC *b)
 
 	if (strcmp(a->comm, b->comm) != 0)
 		return 0;
-	if ((option_mask32 /*& OPT_PID*/) && a->pid != b->pid)
+	if ((option_mask32 & OPT_PID) && a->pid != b->pid)
 		return 0;
 
 	for (walk_a = a->children, walk_b = b->children;
@@ -241,7 +243,7 @@ static int out_args(const char *mystr)
 }
 
 static void
-dump_tree(PROC *current, int level, int rep, int leaf, int last, int closing)
+dump_tree(PROC *parent, PROC *current, int level, int rep, int leaf, int last, int closing)
 {
 	CHILD *walk, *next, **scan;
 	int lvl, i, add, offset, count, comm_len, first;
@@ -278,10 +280,19 @@ dump_tree(PROC *current, int level, int rep, int leaf, int last, int closing)
 		out_string(tmp);
 	}
 	comm_len = out_args(current->comm);
-	if (option_mask32 /*& OPT_PID*/) {
+	if (option_mask32 & OPT_PID) {
 		comm_len += sprintf(tmp, "(%d)", (int)current->pid);
 		out_string(tmp);
-	}
+	} else if (option_mask32 & OPT_UID) {
+		// Only show uid transitions
+		if (!parent || current->uid != parent->uid) {
+			const char *user = get_cached_username(current->uid);
+			comm_len += 1 + strlen(user) + 1;
+			out_char('(');
+			out_string(user);
+			out_char(')');
+		}
+        }
 	offset = G.cur_x;
 
 	if (!current->children)	{
@@ -320,7 +331,7 @@ dump_tree(PROC *current, int level, int rep, int leaf, int last, int closing)
 			first = 0;
 		}
 
-		dump_tree(walk->child, level + 1, count + 1,
+		dump_tree(current, walk->child, level + 1, count + 1,
 				walk == current->children, !next,
 				closing + (count ? 1 : 0));
 	}
@@ -336,7 +347,7 @@ static void dump_by_user(PROC *current, uid_t uid)
 	if (current->uid == uid) {
 		if (G.dumped)
 			putchar('\n');
-		dump_tree(current, 0, 1, 1, 1, 0);
+		dump_tree(NULL, current, 0, 1, 1, 1, 0);
 		G.dumped = 1;
 		return;
 	}
@@ -386,7 +397,7 @@ int pstree_main(int argc UNUSED_PARAM, char **argv)
 
 	G.output_width = get_terminal_width(0);
 
-	getopt32(argv, "^" "p" "\0" "?1");
+	getopt32(argv, "^" "p" "u" "\0" "?1");
 	argv += optind;
 
 	if (argv[0]) {
@@ -400,7 +411,7 @@ int pstree_main(int argc UNUSED_PARAM, char **argv)
 	mread_proc();
 
 	if (!uid)
-		dump_tree(find_proc(pid), 0, 1, 1, 1, 0);
+		dump_tree(NULL, find_proc(pid), 0, 1, 1, 1, 0);
 	else {
 		dump_by_user(find_proc(1), uid);
 		if (!G.dumped) {
